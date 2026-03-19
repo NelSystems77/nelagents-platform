@@ -1,0 +1,684 @@
+// Prisma Schema - SaaS Agents Platform
+// Arquitectura multitenant con aislamiento por tenant_id
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// CORE: TENANTS Y USUARIOS
+// ==========================================
+
+model Tenant {
+  id                String   @id @default(cuid())
+  name              String
+  slug              String   @unique
+  domain            String?  @unique
+  
+  // Plan y límites
+  planType          PlanType @default(BASIC)
+  status            TenantStatus @default(ACTIVE)
+  maxUsers          Int      @default(5)
+  maxClients        Int      @default(1000)
+  maxMonthlyMessages Int     @default(5000)
+  
+  // Configuración
+  timezone          String   @default("America/Costa_Rica")
+  locale            String   @default("es")
+  whatsappNumber    String?
+  whatsappApiKey    String?  @db.Text
+  
+  // Branding
+  logoUrl           String?
+  primaryColor      String?
+  
+  // Metadata
+  metadata          Json?
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  // Relaciones
+  users             User[]
+  clients           Client[]
+  appointments      Appointment[]
+  conversations     Conversation[]
+  messages          Message[]
+  agents            AgentInstance[]
+  campaigns         Campaign[]
+  events            Event[]
+  subscriptions     Subscription[]
+  usageRecords      UsageRecord[]
+  memories             Memory[]
+  reminders            Reminder[]
+
+  @@index([slug])
+  @@index([status])
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+  TRIAL
+}
+
+enum PlanType {
+  TRIAL
+  BASIC
+  PRO
+  BUSINESS
+  ENTERPRISE
+}
+
+model User {
+  id            String   @id @default(cuid())
+  tenantId      String
+  
+  email         String
+  name          String
+  passwordHash  String   @db.Text
+  
+  role          UserRole @default(STAFF)
+  status        UserStatus @default(ACTIVE)
+  
+  // MFA
+  mfaEnabled    Boolean  @default(false)
+  mfaSecret     String?
+  
+  // Metadata
+  avatar        String?
+  phone         String?
+  metadata      Json?
+  
+  lastLoginAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  appointments  Appointment[]
+  messagesSent  Message[]
+  eventsCreated Event[]
+  
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@index([email])
+}
+
+enum UserRole {
+  SUPERADMIN
+  ADMIN
+  STAFF
+  VIEWER
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+// ==========================================
+// CRM: CLIENTES Y CONTACTOS
+// ==========================================
+
+model Client {
+  id            String   @id @default(cuid())
+  tenantId      String
+  
+  // Datos personales
+  name          String
+  phone         String
+  email         String?
+  
+  // WhatsApp
+  whatsappId    String?  @unique
+  
+  // Estado comercial
+  status        ClientStatus @default(LEAD)
+  source        String?  // web, whatsapp, referido, campaña
+  tags          String[] @default([])
+  
+  // Consentimiento
+  consentGiven  Boolean  @default(false)
+  consentDate   DateTime?
+  
+  // Metadata
+  notes         String?  @db.Text
+  metadata      Json?
+  
+  // Última interacción
+  lastContactAt DateTime?
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  appointments  Appointment[]
+  conversations Conversation[]
+  messages      Message[]
+  memories       Memory[]
+  reminders      Reminder[]
+  
+  @@unique([tenantId, phone])
+  @@index([tenantId])
+  @@index([whatsappId])
+  @@index([status])
+}
+
+enum ClientStatus {
+  LEAD
+  PROSPECT
+  ACTIVE
+  INACTIVE
+  CHURNED
+}
+
+// ==========================================
+// AGENDA Y CITAS
+// ==========================================
+
+model Appointment {
+  id            String   @id @default(cuid())
+  tenantId      String
+  clientId      String
+  assignedToId  String?
+  
+  // Detalles
+  title         String
+  description   String?
+  
+  // Fecha y hora
+  scheduledAt   DateTime
+  duration      Int      @default(30) // minutos
+  
+  // Estado
+  status        AppointmentStatus @default(SCHEDULED)
+  
+  // Confirmación
+  confirmed     Boolean  @default(false)
+  confirmedAt   DateTime?
+  
+  // Recordatorios
+  reminderSent  Boolean  @default(false)
+  reminderSentAt DateTime?
+  
+  // Metadata
+  metadata      Json?
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client        Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  assignedTo    User?    @relation(fields: [assignedToId], references: [id])
+  
+  @@index([tenantId])
+  @@index([clientId])
+  @@index([scheduledAt])
+  @@index([status])
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  RESCHEDULED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+// ==========================================
+// MENSAJERÍA Y CONVERSACIONES
+// ==========================================
+
+model Conversation {
+  id            String   @id @default(cuid())
+  tenantId      String
+  clientId      String
+  
+  channel       Channel  @default(WHATSAPP)
+  channelId     String   // ID externo del canal
+  
+  status        ConversationStatus @default(OPEN)
+  
+  // Metadata
+  lastMessageAt DateTime?
+  metadata      Json?
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client        Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  messages      Message[]
+  
+  @@unique([tenantId, channelId])
+  @@index([tenantId])
+  @@index([clientId])
+  @@index([status])
+}
+
+enum Channel {
+  WHATSAPP
+  WEB_CHAT
+  APP
+  EMAIL
+}
+
+enum ConversationStatus {
+  OPEN
+  ASSIGNED
+  RESOLVED
+  CLOSED
+}
+
+model Message {
+  id              String   @id @default(cuid())
+  tenantId        String
+  conversationId  String
+  clientId        String
+  
+  // Dirección
+  direction       MessageDirection
+  
+  // Contenido
+  content         String   @db.Text
+  contentType     MessageContentType @default(TEXT)
+  
+  // WhatsApp específico
+  whatsappId      String?  @unique
+  whatsappStatus  WhatsAppStatus?
+  
+  // Template
+  templateName    String?
+  templateParams  Json?
+  
+  // Metadata
+  metadata        Json?
+  
+  // Agente
+  sentById        String?
+  processedByAgent String?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relaciones
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  client          Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  sentBy          User?    @relation(fields: [sentById], references: [id])
+  
+  @@index([tenantId])
+  @@index([conversationId])
+  @@index([whatsappId])
+  @@index([createdAt])
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageContentType {
+  TEXT
+  IMAGE
+  VIDEO
+  DOCUMENT
+  AUDIO
+  LOCATION
+  TEMPLATE
+}
+
+enum WhatsAppStatus {
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+// ==========================================
+// AGENTES
+// ==========================================
+
+model AgentInstance {
+  id            String   @id @default(cuid())
+  tenantId      String
+  
+  // Definición del agente
+  agentType     AgentType
+  name          String
+  description   String?
+  
+  // Estado
+  enabled       Boolean  @default(true)
+  
+  // Configuración
+  config        Json?
+  
+  // Permisos
+  permissions   String[] @default([])
+  
+  // Metadata
+  version       String   @default("1.0.0")
+  metadata      Json?
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  executions    AgentExecution[]
+  
+  @@unique([tenantId, agentType])
+  @@index([tenantId])
+  @@index([enabled])
+}
+
+enum AgentType {
+  APPOINTMENT
+  REMINDER
+  CONVERSATION
+  SALES_FOLLOWUP
+  CAMPAIGN
+  ANALYTICS
+  REACTIVATION
+}
+
+model AgentExecution {
+  id            String   @id @default(cuid())
+  agentId       String
+  
+  // Trigger
+  triggeredBy   String   // event_id o manual
+  
+  // Estado
+  status        ExecutionStatus
+  
+  // Input/Output
+  input         Json?
+  output        Json?
+  error         String?  @db.Text
+  
+  // Timing
+  startedAt     DateTime @default(now())
+  completedAt   DateTime?
+  duration      Int?     // ms
+  
+  // Metadata
+  metadata      Json?
+  
+  // Relaciones
+  agent         AgentInstance @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  
+  @@index([agentId])
+  @@index([status])
+  @@index([startedAt])
+}
+
+enum ExecutionStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// ==========================================
+// EVENTOS (Event Mesh)
+// ==========================================
+
+model Event {
+  id            String   @id @default(cuid())
+  tenantId      String?
+  
+  // Tipo de evento
+  eventType     String   // message.received, appointment.created, etc.
+  
+  // Payload
+  payload       Json
+  
+  // Metadata
+  correlationId String?
+  causationId   String?  // ID del evento que causó este
+  
+  // Estado
+  status        EventStatus @default(PENDING)
+  processedAt   DateTime?
+  
+  // Reintentos
+  retryCount    Int      @default(0)
+  maxRetries    Int      @default(3)
+  
+  // Error
+  error         String?  @db.Text
+  
+  createdAt     DateTime @default(now())
+  createdById   String?
+  
+  // Relaciones
+  tenant        Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy     User?    @relation(fields: [createdById], references: [id])
+  
+  @@index([tenantId])
+  @@index([eventType])
+  @@index([status])
+  @@index([correlationId])
+  @@index([createdAt])
+}
+
+enum EventStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  DEAD_LETTER
+}
+
+// ==========================================
+// CAMPAÑAS
+// ==========================================
+
+model Campaign {
+  id            String   @id @default(cuid())
+  tenantId      String
+  
+  name          String
+  description   String?
+  
+  // Target
+  targetSegment Json?    // criterios de segmentación
+  
+  // Template
+  templateName  String
+  templateParams Json?
+  
+  // Programación
+  scheduledAt   DateTime?
+  
+  // Estado
+  status        CampaignStatus @default(DRAFT)
+  
+  // Métricas
+  sent          Int      @default(0)
+  delivered     Int      @default(0)
+  read          Int      @default(0)
+  replied       Int      @default(0)
+  
+  // Metadata
+  metadata      Json?
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  @@index([tenantId])
+  @@index([status])
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  COMPLETED
+  CANCELLED
+}
+
+// ==========================================
+// BILLING Y SUSCRIPCIONES
+// ==========================================
+
+model Subscription {
+  id            String   @id @default(cuid())
+  tenantId      String
+  
+  planType      PlanType
+  
+  // Ciclo
+  startDate     DateTime @default(now())
+  endDate       DateTime?
+  
+  // Estado
+  status        SubscriptionStatus @default(ACTIVE)
+  
+  // Precio
+  price         Float
+  currency      String   @default("USD")
+  
+  // Add-ons
+  addOns        Json?
+  
+  // Billing externo
+  stripeSubscriptionId String? @unique
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relaciones
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  @@index([tenantId])
+  @@index([status])
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+model UsageRecord {
+  id            String   @id @default(cuid())
+  tenantId      String
+  
+  // Tipo de uso
+  usageType     UsageType
+  
+  // Cantidad
+  quantity      Int      @default(1)
+  
+  // Costo
+  unitCost      Float?
+  totalCost     Float?
+  
+  // Metadata
+  metadata      Json?
+  
+  recordedAt    DateTime @default(now())
+  
+  // Relaciones
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  @@index([tenantId])
+  @@index([usageType])
+  @@index([recordedAt])
+}
+
+enum UsageType {
+  MESSAGE_SENT
+  MESSAGE_RECEIVED
+  TEMPLATE_SENT
+  AGENT_EXECUTION
+  CAMPAIGN_SENT
+  STORAGE
+}
+
+// ========================================
+// MEMORIA PERSONAL
+// ========================================
+
+model Memory {
+  id        String   @id @default(cuid())
+  tenantId  String
+  clientId  String
+  
+  // Contenido de la memoria
+  key       String   // Ej: "ubicacion_llaves", "password_wifi", "cumpleaños_maria"
+  value     String   // Ej: "cajón azul del escritorio", "WiFi2024#", "15 de marzo"
+  category  String?  // Ej: "ubicaciones", "contraseñas", "fechas", "notas"
+  
+  // Metadatos
+  context   String?  @db.Text // Contexto adicional de la conversación
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relaciones
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  
+  @@unique([tenantId, clientId, key])
+  @@index([clientId])
+  @@index([category])
+}
+
+model Reminder {
+  id          String   @id @default(cuid())
+  tenantId    String
+  clientId    String
+  
+  // Contenido del recordatorio
+  title       String
+  description String?  @db.Text
+  
+  // Temporalidad
+  remindAt    DateTime
+  recurrence  String?  // "daily", "weekly", "monthly", null para una vez
+  
+  // Estado
+  status      ReminderStatus @default(PENDING)
+  sentAt      DateTime?
+  
+  // Metadatos
+  metadata    Json?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relaciones
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  
+  @@index([clientId])
+  @@index([remindAt])
+  @@index([status])
+}
+
+enum ReminderStatus {
+  PENDING
+  SENT
+  CANCELLED
+}
