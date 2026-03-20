@@ -16,6 +16,7 @@
     "incremental": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
+    "noImplicitAny": false,
     "plugins": [
       {
         "name": "next"
