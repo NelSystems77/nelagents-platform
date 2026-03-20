@@ -3,7 +3,7 @@
   "devCommand": "cd ../.. && pnpm run dev --filter=@saas-agents/web",
   "installCommand": "pnpm install",
   "framework": "nextjs",
-  "outputDirectory": "apps/web/.next",
+  "outputDirectory": ".next",
   "cleanUrls": true,
   "trailingSlash": false,
   "rewrites": [
@@ -35,8 +35,5 @@
         }
       ]
     }
-  ],
-  "env": {
-    "NEXT_PUBLIC_APP_URL": "@next_public_app_url"
-  }
+  ]
 }
