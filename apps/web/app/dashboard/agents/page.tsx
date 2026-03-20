@@ -100,7 +100,7 @@ export default async function AgentsPage() {
               </button>
             </div>
           ) : (
-            agents.map((agent) => (
+            agents.map((agent: any) => (
               <div
                 key={agent.id}
                 className="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
