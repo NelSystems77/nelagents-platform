@@ -61,7 +61,7 @@ export function createTenantClient(tenantId: string) {
           ]
           
           if (tenantsModels.includes(model)) {
-            args.data = { ...args.data, tenantId }
+            args.data = { ...args.data, tenantId } as any
           }
           
           return query(args)

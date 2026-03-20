@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import crypto from 'crypto'
 import { prisma } from '@saas-agents/db'
-import { eventBus, createEvent, messageReceivedEventSchema } from '@saas-agents/shared'
+import { eventBus, createEvent } from '@saas-agents/shared'
 
 /**
  * Webhook de WhatsApp Business Platform
@@ -112,7 +112,6 @@ async function processMessages(value: any) {
   if (!messages || messages.length === 0) return
   
   // Identificar tenant por número de WhatsApp
-  const phoneNumberId = metadata.phone_number_id
   const tenant = await prisma.tenant.findFirst({
     where: {
       whatsappNumber: metadata.display_phone_number,

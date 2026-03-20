@@ -71,24 +71,24 @@ export class EventBus {
     try {
       // Crear consumer group si no existe
       try {
-        await redis.xgroup('CREATE', streamName, consumerGroup, '0', 'MKSTREAM')
+        await (redis as any).xgroup('CREATE', streamName, consumerGroup, '0', 'MKSTREAM')
       } catch (error) {
         // Group ya existe, continuar
       }
       
       // Leer eventos pendientes
-      const results = await redis.xreadgroup(
-        'GROUP',
-        consumerGroup,
-        consumerName,
-        'COUNT',
-        count,
-        'BLOCK',
-        0,
-        'STREAMS',
-        streamName,
-        '>'
-      )
+      const results = await (redis as any).xreadgroup(
+  'GROUP',
+  consumerGroup,
+  consumerName,
+  'COUNT',
+  count,
+  'BLOCK',
+  0,
+  'STREAMS',
+  streamName,
+  '>'
+)
       
       if (!results || results.length === 0) {
         return []

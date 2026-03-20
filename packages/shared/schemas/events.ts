@@ -284,14 +284,3 @@ export type DomainEvent =
   | z.infer<typeof usageRecordedEventSchema>
   | z.infer<typeof limitExceededEventSchema>
   | z.infer<typeof campaignScheduledEventSchema>
-
-// Helper para crear eventos con ID y timestamp automáticos
-export function createEvent<T extends DomainEvent>(
-  event: Omit<T, 'id' | 'timestamp'>
-): T {
-  return {
-    ...event,
-    id: crypto.randomUUID(),
-    timestamp: new Date().toISOString(),
-  } as T
-}
