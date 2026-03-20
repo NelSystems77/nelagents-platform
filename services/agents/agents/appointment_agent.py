@@ -9,6 +9,8 @@ from utils.config import settings, get_db
 from sqlalchemy import text
 import json
 import os
+import uuid
+
 
 logger = logging.getLogger(__name__)
 
@@ -142,10 +144,14 @@ Responde SOLO con JSON:
             hora_str = appointment_info['hora']
             
             scheduled_at = datetime.fromisoformat(f"{fecha_str}T{hora_str}:00")
+
+            # Generar ID único
+            appointment_id = 'cmm' + uuid.uuid4().hex[:21]  # Formato compatible con cuid
             
             with get_db() as db:
                 query = text("""
                     INSERT INTO "Appointment" (
+                        "id", 
                         "tenantId",
                         "clientId",
                         "title",
@@ -155,6 +161,7 @@ Responde SOLO con JSON:
                         "createdAt",
                         "updatedAt"
                     ) VALUES (
+                        :appointment_id,
                         :tenant_id,
                         :client_id,
                         :title,
@@ -168,6 +175,7 @@ Responde SOLO con JSON:
                 """)
                 
                 result = db.execute(query, {
+                    "appointment_id": appointment_id,
                     "tenant_id": tenant_id,
                     "client_id": client_id,
                     "title": appointment_info.get('servicio', 'Consulta general'),
