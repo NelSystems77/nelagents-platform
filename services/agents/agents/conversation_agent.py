@@ -426,9 +426,28 @@ Formato de respuesta JSON:
             
         elif intent == 'agendar_cita':
             logger.info("Delegating to appointment agent")
+            try:
+                appointment_event = {
+                   'id': 'temp-id',
+                   'tenantId': tenant_id,
+                   'payload': {
+                       'conversationId': conversation_id,
+                        'clientId': client_id,
+                        'content': analysis.get('original_message', '')
+                   }
+                }
+                logger.info(f"[DEBUG] About to call appointment agent with event: {appointment_event}")
+                self.appointment_agent.handle_appointment_request(appointment_event)
+                logger.info("[DEBUG] Appointment agent call completed")
+            except Exception as e:
+                logger.error(f"[DEBUG] Error calling appointment agent: {e}")
+                import traceback
+                logger.error(f"[DEBUG] Traceback: {traceback.format_exc()}")
             
         elif analysis.get('requires_human'):
             logger.info("Requires human attention")
+                       
+
             # Crear evento para Appointment Agent
             appointment_event = {
                 'id': 'temp-id',
