@@ -49,9 +49,9 @@ export async function POST(request: NextRequest) {
     
     const data = JSON.parse(body)
     
-    // Responder rápido a Meta (acknowledge receipt)
-    // El procesamiento real ocurre asíncronamente
-    setImmediate(() => processWhatsAppEvent(data))
+    
+    // Procesar el evento (serverless no soporta setImmediate)
+    await processWhatsAppEvent(data)
     
     return new NextResponse('EVENT_RECEIVED', { status: 200 })
     
