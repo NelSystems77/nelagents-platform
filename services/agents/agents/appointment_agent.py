@@ -17,7 +17,7 @@ class AppointmentAgent:
         """Inicializa el agente de citas"""
         self.groq_client = Groq(api_key=os.getenv('GROQ_API_KEY')) if os.getenv('GROQ_API_KEY') else None
         logger.info("Appointment agent initialized")
-    
+
     def handle_appointment_request(self, event: Dict[str, Any]):
         """
         Procesa solicitud de cita
@@ -28,6 +28,7 @@ class AppointmentAgent:
         4. Envía confirmación
         """
         try:
+            logger.info(f"[DEBUG] Appointment request received: {event}")
             payload = event['payload']
             tenant_id = event['tenantId']
             
@@ -61,6 +62,8 @@ class AppointmentAgent:
             
         except Exception as e:
             logger.error(f"Error handling appointment request: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
     
     def extract_appointment_info(
         self, 
