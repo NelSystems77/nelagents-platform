@@ -21,8 +21,8 @@ export default async function AgentsPage() {
 
   const agents = await getAgents(tenantId)
 
-  const activeAgents = agents.filter(a => a.enabled)
-  const inactiveAgents = agents.filter(a => !a.enabled)
+  const activeAgents = agents.filter((a: any) => a.enabled)
+  const inactiveAgents = agents.filter((a: any) => !a.enabled)
 
   return (
     <div>
