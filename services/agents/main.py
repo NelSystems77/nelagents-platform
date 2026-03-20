@@ -7,6 +7,19 @@ import threading
 from workers.event_consumer import EventConsumer
 from workers.reminder_worker import ReminderWorker
 from agents.conversation_agent import ConversationAgent
+from fastapi import FastAPI
+import uvicorn
+
+# HTTP health check para Render
+
+app = FastAPI()
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "service": "nelagents-workers"}
+
+def run_http_server():
+    uvicorn.run(app, host="0.0.0.0", port=10000, log_level="warning")
 
 # Configurar logging
 logging.basicConfig(
@@ -89,6 +102,11 @@ def main():
     
     logger.info("✅ All workers running. Press Ctrl+C to stop.")
     
+    # Iniciar servidor HTTP para health check
+    http_thread = threading.Thread(target=run_http_server, daemon=True, name="HTTPServer")
+    http_thread.start()
+    logger.info("HTTP health check server started on port 10000")
+
     # Mantener el main thread vivo
     try:
         while True:
