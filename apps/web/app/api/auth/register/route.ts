@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { hash } from 'bcryptjs'
 import { prisma } from '@saas-agents/db'
+import { Prisma } from '@prisma/client'
 import { z } from 'zod'
 
 const registerSchema = z.object({
@@ -47,7 +48,7 @@ export async function POST(request: NextRequest) {
     const passwordHash = await hash(validatedData.password, 12)
     
     // Crear tenant y usuario en una transacción
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // Crear tenant
       const tenant = await tx.tenant.create({
         data: {
