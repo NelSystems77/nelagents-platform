@@ -433,12 +433,38 @@ Formato de respuesta JSON:
             if response:
                 self.send_message(tenant_id, conversation_id, client_id, response)
                 
-    def send_message(
-        self, 
-        tenant_id: str, 
-        conversation_id: str, 
-        client_id: str, 
-        content: str
-    ):
-        """Envía mensaje al cliente"""
-        logger.info(f"Sending message to {client_id}: {content[:50]}...")
+def send_message(
+    self, 
+    tenant_id: str, 
+    conversation_id: str, 
+    client_id: str, 
+    content: str
+):
+    """Envía mensaje al cliente"""
+    logger.info(f"Sending message to {client_id}: {content[:50]}...")
+    
+    try:
+        # Obtener teléfono del cliente
+        from sqlalchemy import text
+        with get_db() as db:
+            query = text("""
+                SELECT c.phone FROM "Client" c
+                WHERE c.id = :client_id
+                AND c."tenantId" = :tenant_id
+            """)
+            result = db.execute(query, {"client_id": client_id, "tenant_id": tenant_id})
+            client = result.fetchone()
+            
+            if not client:
+                logger.error(f"Client not found: {client_id}")
+                return
+            
+            phone = client[0]
+            
+        # Enviar mensaje por WhatsApp
+        from utils.whatsapp_sender import whatsapp_sender
+        whatsapp_sender.send_message(phone, content)
+        logger.info(f"Message sent successfully to {phone}")
+        
+    except Exception as e:
+        logger.error(f"Error sending message: {e}")
