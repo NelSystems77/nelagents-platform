@@ -238,4 +238,34 @@ Responde SOLO con JSON:
             logger.error(f"Error sending confirmation: {e}")
     
     def send_clarification_message(self, tenant_id: str, client_id: str):
-        """Envía mensaje pidiendo más informac
+        """Envía mensaje pidiendo más información"""
+        
+        try:
+            with get_db() as db:
+                query = text("""
+                    SELECT c.phone FROM "Client" c
+                    WHERE c.id = :client_id
+                    AND c."tenantId" = :tenant_id
+                """)
+                result = db.execute(query, {"client_id": client_id, "tenant_id": tenant_id})
+                client = result.fetchone()
+                
+                if not client:
+                    return
+                
+                phone = client[0]
+            
+            message = """Para agendar tu cita, necesito:
+
+📅 ¿Qué día prefieres?
+🕐 ¿A qué hora?
+📋 ¿Qué servicio necesitas?
+
+Ejemplo: "Quiero una cita mañana a las 3pm para consulta general" """
+            
+            from utils.whatsapp_sender import whatsapp_sender
+            whatsapp_sender.send_message(phone, message)
+            logger.info(f"Clarification request sent to {phone}")
+            
+        except Exception as e:
+            logger.error(f"Error sending clarification: {e}")
