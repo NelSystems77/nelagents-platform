@@ -10,6 +10,7 @@ from utils.config import settings, get_db
 from anthropic import Anthropic
 from groq import Groq
 from agents.memory_agent import MemoryAgent
+from agents.appointment_agent import AppointmentAgent
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class ConversationAgent:
         
         # Inicializar Memory Agent
         self.memory_agent = MemoryAgent()
+        self.appointment_agent = AppointmentAgent()
         
         # Prioridad: Groq primero (gratis), OpenAI segundo, Claude tercero
         if self.groq_client:
@@ -425,6 +427,20 @@ Formato de respuesta JSON:
         elif intent == 'agendar_cita':
             logger.info("Delegating to appointment agent")
             
+        elif analysis.get('requires_human'):
+            logger.info("Requires human attention")
+            # Crear evento para Appointment Agent
+            appointment_event = {
+                'id': 'temp-id',
+                'tenantId': tenant_id,
+                'payload': {
+                    'conversationId': conversation_id,
+                    'clientId': client_id,
+                    'content': analysis.get('original_message', '')
+                }
+            }
+            self.appointment_agent.handle_appointment_request(appointment_event)
+
         elif analysis.get('requires_human'):
             logger.info("Requires human attention")
             
