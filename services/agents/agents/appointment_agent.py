@@ -152,7 +152,6 @@ Responde SOLO con JSON:
                         "scheduledAt",
                         "duration",
                         "status",
-                        "notes",
                         "createdAt",
                         "updatedAt"
                     ) VALUES (
@@ -162,7 +161,6 @@ Responde SOLO con JSON:
                         :scheduled_at,
                         :duration,
                         :status,
-                        :notes,
                         NOW(),
                         NOW()
                     )
@@ -176,7 +174,6 @@ Responde SOLO con JSON:
                     "scheduled_at": scheduled_at,
                     "duration": 60,
                     "status": "SCHEDULED",
-                    "notes": appointment_info.get('notas', '')
                 })
                 
                 appointment = result.fetchone()
