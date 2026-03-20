@@ -240,6 +240,8 @@ async function processMessages(value: any) {
         },
       })
       
+      console.log('[DEBUG] About to create event for message:', savedMessage.id)
+
       // PUBLICAR EVENTO AL BUS
       const event = createEvent({
         eventType: 'message.received' as const,
@@ -259,13 +261,17 @@ async function processMessages(value: any) {
       
       await eventBus.publish(event)
       
+      console.log('[DEBUG] Event created, about to publish:', event.eventType)
+
       console.log('Message processed and published:', {
         messageId: savedMessage.id,
         tenantId: tenant.id,
       })
-      
+      console.log('[DEBUG] Event published successfully')
+
     } catch (error) {
-      console.error('Error processing individual message:', error)
+      console.error('[DEBUG] Error processing individual message:', error)
+      console.error('[DEBUG] Error stack:', error instanceof Error ? error.stack : 'No stack')
       // Continuar con siguiente mensaje
     }
   }
