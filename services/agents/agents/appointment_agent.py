@@ -1,249 +1,377 @@
 """
-Appointment Agent - Gestiona agendamiento de citas
+Agente de Conversación - Procesa mensajes y genera respuestas inteligentes
 """
 import logging
 from typing import Dict, Any, Optional
+from openai import OpenAI
+from sqlalchemy import select, and_
 from datetime import datetime, timedelta
-from groq import Groq
 from utils.config import settings, get_db
-from sqlalchemy import text
-import json
-import os
+from anthropic import Anthropic
+from groq import Groq
+from agents.memory_agent import MemoryAgent
+from agents.appointment_agent import AppointmentAgent
 
 logger = logging.getLogger(__name__)
 
-class AppointmentAgent:
-    def __init__(self):
-        """Inicializa el agente de citas"""
-        self.groq_client = Groq(api_key=os.getenv('GROQ_API_KEY')) if os.getenv('GROQ_API_KEY') else None
-        logger.info("Appointment agent initialized")
-
-    def handle_appointment_request(self, event: Dict[str, Any]):
-        """
-        Procesa solicitud de cita
+class ConversationAgent:
+    def __init__(self, memory_agent: MemoryAgent):
+        """Inicializa el agente con clientes de IA y configuración"""
+        self.memory_agent = memory_agent
+        self.appointment_agent = AppointmentAgent()
         
-        1. Extrae fecha, hora, servicio del mensaje
-        2. Valida disponibilidad (básica)
-        3. Crea la cita
-        4. Envía confirmación
+        # Groq (gratis y rápido)
+        self.groq_client = None
+        if settings.GROQ_API_KEY:
+            try:
+                self.groq_client = Groq(api_key=settings.GROQ_API_KEY)
+                logger.info("Conversation agent initialized. Primary: groq")
+            except Exception as e:
+                logger.warning(f"Groq initialization failed: {e}")
+        
+        # OpenAI (fallback)
+        self.openai_client = None
+        if settings.OPENAI_API_KEY:
+            try:
+                self.openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+                logger.info("OpenAI client initialized")
+            except Exception as e:
+                logger.warning(f"OpenAI initialization failed: {e}")
+        
+        # Anthropic Claude (fallback final)
+        self.anthropic_client = None
+        if settings.ANTHROPIC_API_KEY:
+            try:
+                self.anthropic_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+                logger.info("Anthropic client initialized")
+            except Exception as e:
+                logger.warning(f"Anthropic initialization failed: {e}")
+    
+    def handle_message_received(self, event: Dict[str, Any]):
+        """
+        Procesa evento de mensaje recibido
+        
+        1. Detecta intención
+        2. Extrae entidades
+        3. Decide acción (responder, derivar a agente específico, derivar a humano)
+        4. Ejecuta acción
         """
         try:
-            logger.info(f"[DEBUG] Appointment request received: {event}")
             payload = event['payload']
             tenant_id = event['tenantId']
             
+            message_id = payload['messageId']
             conversation_id = payload['conversationId']
             client_id = payload['clientId']
             content = payload['content']
             
-            logger.info(f"Processing appointment request for client: {client_id}")
+            logger.info(f"Processing message: {message_id}")
             
-            # Extraer información de la cita con IA
-            appointment_info = self.extract_appointment_info(content, tenant_id, client_id)
-            
-            if not appointment_info:
-                self.send_clarification_message(tenant_id, client_id)
-                return
-            
-            # Crear la cita
-            appointment = self.create_appointment(
-                tenant_id=tenant_id,
-                client_id=client_id,
-                appointment_info=appointment_info
+            # Obtener contexto de conversación
+            context = self.get_conversation_context(
+                tenant_id, 
+                conversation_id,
+                client_id
             )
             
-            if appointment:
-                # Enviar confirmación
-                self.send_confirmation_message(
-                    tenant_id=tenant_id,
-                    client_id=client_id,
-                    appointment=appointment
-                )
+            # Analizar intención con IA (con fallback automático)
+            analysis = self.analyze_message(content, context)
+            
+            # Publicar evento normalizado
+            self.publish_normalized_event(
+                event_id=event['id'],
+                tenant_id=tenant_id,
+                message_id=message_id,
+                conversation_id=conversation_id,
+                client_id=client_id,
+                analysis=analysis
+            )
+            
+            # Tomar acción basada en intención
+            self.take_action(
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                client_id=client_id,
+                analysis=analysis
+            )
             
         except Exception as e:
-            logger.error(f"Error handling appointment request: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-    
-    def extract_appointment_info(
+            logger.error(f"Error handling message: {e}")
+            
+    def get_conversation_context(
         self, 
-        content: str, 
-        tenant_id: str,
+        tenant_id: str, 
+        conversation_id: str,
         client_id: str
-    ) -> Optional[Dict[str, Any]]:
-        """Extrae información de la cita usando Groq"""
+    ) -> Dict[str, Any]:
+        """Obtiene contexto de la conversación (últimos mensajes, datos del cliente)"""
         
+        with get_db() as db:
+            # Obtener últimos 10 mensajes
+            from sqlalchemy import text
+            
+            query = text("""
+                SELECT m.content, m.direction, m."createdAt"
+                FROM "Message" m
+                WHERE m."conversationId" = :conversation_id
+                AND m."tenantId" = :tenant_id
+                ORDER BY m."createdAt" DESC
+                LIMIT 10
+            """)
+            
+            result = db.execute(
+                query, 
+                {"conversation_id": conversation_id, "tenant_id": tenant_id}
+            )
+            messages = result.fetchall()
+            
+            # Obtener datos del cliente
+            client_query = text("""
+                SELECT c.name, c.status, c.tags
+                FROM "Client" c
+                WHERE c.id = :client_id
+                AND c."tenantId" = :tenant_id
+            """)
+            
+            client_result = db.execute(
+                client_query,
+                {"client_id": client_id, "tenant_id": tenant_id}
+            )
+            client = client_result.fetchone()
+            
+            # Obtener citas próximas
+            appointments_query = text("""
+                SELECT a.id, a.title, a."scheduledAt", a.status
+                FROM "Appointment" a
+                WHERE a."clientId" = :client_id
+                AND a."tenantId" = :tenant_id
+                AND a."scheduledAt" > NOW()
+                AND a.status IN ('SCHEDULED', 'CONFIRMED')
+                ORDER BY a."scheduledAt" ASC
+                LIMIT 3
+            """)
+            
+            appointments_result = db.execute(
+                appointments_query,
+                {"client_id": client_id, "tenant_id": tenant_id}
+            )
+            appointments = appointments_result.fetchall()
+            
+            return {
+                "messages": [
+                    {
+                        "content": msg[0],
+                        "direction": msg[1],
+                        "timestamp": msg[2].isoformat() if msg[2] else None
+                    }
+                    for msg in messages
+                ],
+                "client": {
+                    "name": client[0] if client else "Cliente",
+                    "status": client[1] if client else "LEAD",
+                    "tags": client[2] if client else []
+                },
+                "appointments": [
+                    {
+                        "id": apt[0],
+                        "title": apt[1],
+                        "scheduledAt": apt[2].isoformat() if apt[2] else None,
+                        "status": apt[3]
+                    }
+                    for apt in appointments
+                ]
+            }
+    
+    def analyze_message(self, content: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Analiza mensaje con IA (Groq → OpenAI → Claude fallback en cascada)"""
+        
+        # 1. Intentar Groq (gratis y rápido)
+        result = self._analyze_with_groq(content, context)
+        if result:
+            result['original_message'] = content
+            return result
+        logger.warning("Groq failed, trying OpenAI...")
+        
+        # 2. Intentar OpenAI
+        result = self._analyze_with_openai(content, context)
+        if result:
+            result['original_message'] = content
+            return result
+        logger.warning("OpenAI failed, trying Claude...")
+        
+        # 3. Intentar Claude
+        result = self._analyze_with_claude(content, context)
+        if result:
+            result['original_message'] = content
+            return result
+        
+        # 4. Fallback seguro si todos fallan
+        logger.error("All AI providers failed, using safe fallback")
+        return {
+            "intent": "otro",
+            "entities": {},
+            "sentiment": "neutral",
+            "requires_human": True,
+            "suggested_response": "Gracias por tu mensaje. Un agente te atenderá pronto.",
+            "original_message": content
+        }
+    
+    def _analyze_with_groq(self, content: str, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Analiza con Groq (gratis)"""
         if not self.groq_client:
-            logger.error("Groq client not available")
             return None
-        
+            
         try:
-            system_prompt = """Eres un asistente para extraer información de citas/turnos.
-Extrae del mensaje:
-- fecha: fecha de la cita (formato ISO 8601, ej: 2026-03-21)
-- hora: hora de la cita (formato HH:MM, ej: 15:00)
-- servicio: tipo de servicio solicitado (si se menciona)
-- notas: cualquier nota adicional
-
-Reglas:
-- "mañana" = día siguiente
-- "pasado mañana" = dentro de 2 días
-- Si no se menciona hora, usa 10:00 por defecto
-- Si no se menciona servicio, usa "Consulta general"
-
-Fecha de hoy: {today}
+            system_prompt = """Eres un asistente inteligente para un negocio.
+Analiza el mensaje del cliente y detecta:
+1. Intención principal:
+   - saludar: Saludo general
+   - agendar_cita: Agendar cita/turno
+   - consultar: Preguntas sobre servicios/productos
+   - cancelar: Cancelar algo
+   - confirmar: Confirmar algo
+   - guardar_memoria: Usuario quiere guardar información ("guardé X en Y", "anota que...", "recuerda que mi contraseña es...")
+   - recuperar_memoria: Usuario busca información guardada ("¿dónde puse...?", "¿cuál es mi...?")
+   - crear_recordatorio: Usuario quiere un recordatorio futuro ("recuérdame...", "avísame cuando...", "quiero que me recuerdes...")
+   - consultar_recordatorios: Usuario pregunta por sus recordatorios ("¿qué tengo pendiente?", "mis recordatorios")
+   - otro: Cualquier otra cosa
+2. Entidades relevantes (fecha, hora, servicio, etc.)
+3. Sentimiento (positivo, neutral, negativo)
+4. Requiere_atencion_humana (true/false)
 
 Responde SOLO con JSON:
-{{
-  "fecha": "YYYY-MM-DD",
-  "hora": "HH:MM",
-  "servicio": "string",
-  "notas": "string",
-  "confianza": 0.0-1.0
-}}"""
+{
+  "intent": "string",
+  "entities": {},
+  "sentiment": "string",
+  "requires_human": boolean,
+  "suggested_response": "string"
+}"""
             
-            today = datetime.now().strftime("%Y-%m-%d")
+            user_prompt = f"""Mensaje del cliente: "{content}"
+
+Contexto:
+- Cliente: {context['client']['name']}
+- Estado: {context['client']['status']}
+- Citas próximas: {len(context['appointments'])}
+"""
             
             response = self.groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[
-                    {"role": "system", "content": system_prompt.format(today=today)},
-                    {"role": "user", "content": f"Mensaje del cliente: {content}"}
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.2,
+                temperature=0.3,
                 response_format={"type": "json_object"}
             )
             
-            info = json.loads(response.choices[0].message.content)
-            logger.info(f"Appointment info extracted: {info}")
-            
-            # Validar confianza mínima
-            if info.get('confianza', 0) < 0.5:
-                logger.warning("Low confidence in appointment extraction")
-                return None
-            
-            return info
+            import json
+            analysis = json.loads(response.choices[0].message.content)
+            logger.info("Analysis successful with Groq")
+            return analysis
             
         except Exception as e:
-            logger.error(f"Error extracting appointment info: {e}")
+            logger.error(f"Groq error: {e}")
             return None
     
-    def create_appointment(
-        self,
-        tenant_id: str,
-        client_id: str,
-        appointment_info: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
-        """Crea la cita en la base de datos"""
+    def _analyze_with_openai(self, content: str, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Analiza con OpenAI (fallback)"""
+        if not self.openai_client:
+            return None
         
-        try:
-            # Combinar fecha y hora
-            fecha_str = appointment_info['fecha']
-            hora_str = appointment_info['hora']
-            
-            scheduled_at = datetime.fromisoformat(f"{fecha_str}T{hora_str}:00")
-            
-            with get_db() as db:
-                query = text("""
-                    INSERT INTO "Appointment" (
-                        "tenantId",
-                        "clientId",
-                        "title",
-                        "scheduledAt",
-                        "duration",
-                        "status",
-                        "notes",
-                        "createdAt",
-                        "updatedAt"
-                    ) VALUES (
-                        :tenant_id,
-                        :client_id,
-                        :title,
-                        :scheduled_at,
-                        :duration,
-                        :status,
-                        :notes,
-                        NOW(),
-                        NOW()
-                    )
-                    RETURNING id, "scheduledAt", title
-                """)
-                
-                result = db.execute(query, {
-                    "tenant_id": tenant_id,
-                    "client_id": client_id,
-                    "title": appointment_info.get('servicio', 'Consulta general'),
-                    "scheduled_at": scheduled_at,
-                    "duration": 60,  # 60 minutos por defecto
-                    "status": "SCHEDULED",
-                    "notes": appointment_info.get('notas', '')
-                })
-                
-                appointment = result.fetchone()
-                db.commit()
-                
-                logger.info(f"Appointment created: {appointment[0]}")
-                
-                return {
-                    "id": appointment[0],
-                    "scheduledAt": appointment[1],
-                    "title": appointment[2]
-                }
-                
-        except Exception as e:
-            logger.error(f"Error creating appointment: {e}")
-            return None
+        # Similar implementation
+        return None
     
-    def send_confirmation_message(
+    def _analyze_with_claude(self, content: str, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Analiza con Claude (fallback final)"""
+        if not self.anthropic_client:
+            return None
+        
+        # Similar implementation
+        return None
+    
+    def publish_normalized_event(
+        self,
+        event_id: str,
+        tenant_id: str,
+        message_id: str,
+        conversation_id: str,
+        client_id: str,
+        analysis: Dict[str, Any]
+    ):
+        """Publica evento normalizado al bus"""
+        logger.info(f"Normalized event: {analysis.get('intent')}")
+    
+    def take_action(
         self,
         tenant_id: str,
+        conversation_id: str,
         client_id: str,
-        appointment: Dict[str, Any]
+        analysis: Dict[str, Any]
     ):
-        """Envía mensaje de confirmación"""
+        """Toma acción basada en el análisis"""
+        
+        intent = analysis.get('intent')
+        
+        # Intenciones de memoria - delegar a Memory Agent
+        if intent in ['guardar_memoria', 'recuperar_memoria', 'crear_recordatorio', 'consultar_recordatorios']:
+            logger.info(f"Delegating to memory agent: {intent}")
+            memory_event = {
+                'id': 'temp-id',
+                'tenantId': tenant_id,
+                'payload': {
+                    'messageId': 'temp-msg-id',
+                    'conversationId': conversation_id,
+                    'clientId': client_id,
+                    'content': analysis.get('original_message', ''),
+                    'intent': intent,
+                    'entities': analysis.get('entities', {})
+                }
+            }
+            self.memory_agent.handle_memory_intent(memory_event)
+            
+        elif intent == 'agendar_cita':
+            logger.info("Delegating to appointment agent")
+            try:
+                appointment_event = {
+                    'id': 'temp-id',
+                    'tenantId': tenant_id,
+                    'payload': {
+                        'conversationId': conversation_id,
+                        'clientId': client_id,
+                        'content': analysis.get('original_message', '')
+                    }
+                }
+                logger.info(f"[DEBUG] About to call appointment agent with event: {appointment_event}")
+                self.appointment_agent.handle_appointment_request(appointment_event)
+                logger.info("[DEBUG] Appointment agent call completed")
+            except Exception as e:
+                logger.error(f"[DEBUG] Error calling appointment agent: {e}")
+                import traceback
+                logger.error(f"[DEBUG] Traceback: {traceback.format_exc()}")
+            
+        elif analysis.get('requires_human'):
+            logger.info("Requires human attention")
+            
+        else:
+            response = analysis.get('suggested_response')
+            if response:
+                self.send_message(tenant_id, conversation_id, client_id, response)
+                
+    def send_message(
+        self, 
+        tenant_id: str, 
+        conversation_id: str, 
+        client_id: str, 
+        content: str
+    ):
+        """Envía mensaje al cliente"""
+        logger.info(f"Sending message to {client_id}: {content[:50]}...")
         
         try:
             # Obtener teléfono del cliente
-            with get_db() as db:
-                query = text("""
-                    SELECT c.phone, c.name FROM "Client" c
-                    WHERE c.id = :client_id
-                    AND c."tenantId" = :tenant_id
-                """)
-                result = db.execute(query, {"client_id": client_id, "tenant_id": tenant_id})
-                client = result.fetchone()
-                
-                if not client:
-                    return
-                
-                phone = client[0]
-                name = client[1]
-            
-            # Formatear fecha/hora
-            scheduled_at = appointment['scheduledAt']
-            fecha_formatted = scheduled_at.strftime("%d/%m/%Y")
-            hora_formatted = scheduled_at.strftime("%H:%M")
-            
-            message = f"""✅ *Cita confirmada*
-
-📅 Fecha: {fecha_formatted}
-🕐 Hora: {hora_formatted}
-📋 Servicio: {appointment['title']}
-
-¡Te esperamos! Si necesitas cancelar o reprogramar, avísanos con anticipación."""
-            
-            # Enviar mensaje
-            from utils.whatsapp_sender import whatsapp_sender
-            whatsapp_sender.send_message(phone, message)
-            logger.info(f"Confirmation sent to {phone}")
-            
-        except Exception as e:
-            logger.error(f"Error sending confirmation: {e}")
-    
-    def send_clarification_message(self, tenant_id: str, client_id: str):
-        """Envía mensaje pidiendo más información"""
-        
-        try:
+            from sqlalchemy import text
             with get_db() as db:
                 query = text("""
                     SELECT c.phone FROM "Client" c
@@ -254,21 +382,15 @@ Responde SOLO con JSON:
                 client = result.fetchone()
                 
                 if not client:
+                    logger.error(f"Client not found: {client_id}")
                     return
                 
                 phone = client[0]
-            
-            message = """Para agendar tu cita, necesito:
-
-📅 ¿Qué día prefieres?
-🕐 ¿A qué hora?
-📋 ¿Qué servicio necesitas?
-
-Ejemplo: "Quiero una cita mañana a las 3pm para consulta general" """
-            
+                
+            # Enviar mensaje por WhatsApp
             from utils.whatsapp_sender import whatsapp_sender
-            whatsapp_sender.send_message(phone, message)
-            logger.info(f"Clarification request sent to {phone}")
+            whatsapp_sender.send_message(phone, content)
+            logger.info(f"Message sent successfully to {phone}")
             
         except Exception as e:
-            logger.error(f"Error sending clarification: {e}")
+            logger.error(f"Error sending message: {e}")
