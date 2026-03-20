@@ -1,0 +1,14 @@
+notepad services\agents\.dockerignore
+```
+
+**Contenido:**
+```
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.env
+.vscode/
+*.log
