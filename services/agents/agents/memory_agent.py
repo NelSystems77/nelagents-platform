@@ -455,32 +455,37 @@ Intención detectada: {intent}{memories_context}"""
         content: str
     ):
         """Envía mensaje al cliente"""
-    def send_memory_response(self, tenant_id: str, client_id: str, content: str):
-        """Envía mensaje al cliente"""
-    logger.info(f"Sending memory response to {client_id}: {content[:50]}...")
-    
-    try:
-        # Obtener teléfono del cliente
-        from sqlalchemy import text
-        with get_db() as db:
-            query = text("""
-                SELECT c.phone FROM "Client" c
-                WHERE c.id = :client_id
-                AND c."tenantId" = :tenant_id
-            """)
-            result = db.execute(query, {"client_id": client_id, "tenant_id": tenant_id})
-            client = result.fetchone()
-            
-            if not client:
-                logger.error(f"Client not found: {client_id}")
-                return
-            
-            phone = client[0]
+def send_message(
+        self, 
+        tenant_id: str, 
+        conversation_id: str, 
+        client_id: str, 
+        content: str
+    ):
+        """Envía mensaje al cliente a través de WhatsApp"""
+        logger.info(f"Sending memory response to {client_id}: {content[:50]}...")
         
-        # Enviar mensaje por WhatsApp
-        from utils.whatsapp_sender import whatsapp_sender
-        whatsapp_sender.send_message(phone, content)
-        logger.info(f"Memory response sent successfully to {phone}")
-        
-    except Exception as e:
-        logger.error(f"Error sending memory response: {e}")
+        try:
+            # Ya tienes 'text' importado al inicio del archivo, no necesitas importarlo localmente
+            with get_db() as db:
+                query = text("""
+                    SELECT c.phone FROM "Client" c
+                    WHERE c.id = :client_id
+                    AND c."tenantId" = :tenant_id
+                """)
+                result = db.execute(query, {"client_id": client_id, "tenant_id": tenant_id})
+                client = result.fetchone()
+                
+                if not client:
+                    logger.error(f"Client not found: {client_id}")
+                    return  # ✅ Este return ahora sí está dentro de una función
+                
+                phone = client[0]
+            
+            # Enviar mensaje por WhatsApp
+            from utils.whatsapp_sender import whatsapp_sender
+            whatsapp_sender.send_message(phone, content)
+            logger.info(f"Memory response sent successfully to {phone}")
+            
+        except Exception as e:
+            logger.error(f"Error sending memory response: {e}")
